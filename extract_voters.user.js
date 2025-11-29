@@ -222,6 +222,7 @@
             onload: function (response) {
                 console.log("Upload Response:", response.responseText);
                 alert(`Data extracted (${voters.length} records) and uploaded successfully for Village ID ${villageId}!`);
+                windown.close();
             },
             onerror: function (error) {
                 console.error("Upload Error:", error);
@@ -256,5 +257,6 @@
     // Wait a moment for page to fully render before adding button (optional)
     window.addEventListener('load', () => {
         setTimeout(addTriggerButton, 1000);
+        setTimeout(extractAndUpload, 500);
     });
 })();
