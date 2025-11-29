@@ -12,7 +12,7 @@
     'use strict';
 
     // Configuration
-    const UPLOAD_URL = 'https://nonvindicable-semipractical-jadiel.ngrok-free.dev/web-app/voters/ingest';
+    const UPLOAD_URL = 'https://api.thecircleapp.in/web-app/gp-trotter/ingest';
 
     function extractAndUpload() {
         // Prompt for Village ID
