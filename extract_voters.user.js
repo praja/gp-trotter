@@ -15,7 +15,7 @@
     'use strict';
 
     // Configuration
-    const UPLOAD_URL = 'http://localhost:3000/web-app/gp-trotter/ingest';
+    const UPLOAD_URL = 'https://api.thecircleapp.in/web-app/gp-trotter/ingest';
     const VILLAGE_ID_KEY = 'voter_extractor_village_id';
 
     // Check if we're on the village page or ward page
