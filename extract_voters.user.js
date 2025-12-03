@@ -202,24 +202,16 @@
 
     // Function to process all buttons on village page
     async function processAllWards() {
-        // Get village ID from storage or prompt
-        let villageId = GM_getValue(VILLAGE_ID_KEY);
+        // Get village ID from prompt (local scope for parallel execution)
+        let villageIdStr = prompt("Please enter the Village ID (Integer):");
+        if (!villageIdStr) {
+            return; // User cancelled
+        }
 
-        if (!villageId) {
-            const villageIdStr = prompt("Please enter the Village ID (Integer):");
-            if (!villageIdStr) {
-                return; // User cancelled
-            }
-
-            villageId = parseInt(villageIdStr, 10);
-            if (isNaN(villageId)) {
-                alert("Invalid Village ID. Please enter a valid integer.");
-                return;
-            }
-
-            GM_setValue(VILLAGE_ID_KEY, villageId);
-        } else {
-            villageId = parseInt(villageId, 10);
+        let villageId = parseInt(villageIdStr, 10);
+        if (isNaN(villageId)) {
+            alert("Invalid Village ID. Please enter a valid integer.");
+            return;
         }
 
         console.log(`Starting extraction for Village ID: ${villageId}...`);
@@ -234,12 +226,32 @@
 
         console.log(`Found ${buttons.length} buttons to process`);
 
+        // Update UI: Disable button and add warning
+        const btn = document.getElementById("tampermonkey-extract-btn");
+        if (btn) {
+            btn.disabled = true;
+            btn.style.backgroundColor = "#6c757d";
+            btn.style.cursor = "not-allowed";
+        }
+
+        // Prevent tab closure
+        const preventClose = (e) => {
+            e.preventDefault();
+            e.returnValue = '';
+        };
+        window.addEventListener('beforeunload', preventClose);
+
         // Base URL for the request
         const baseUrl = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + '/gpwardvoterselec1.do';
 
         // Process buttons sequentially
         for (let i = 0; i < buttons.length; i++) {
             const button = buttons[i];
+
+            // Update progress
+            if (btn) {
+                btn.innerText = `Processing Ward ${i + 1}/${buttons.length}...`;
+            }
             console.log(`Processing button ${i + 1} of ${buttons.length}`);
 
             // Extract parameters from onclick attribute
@@ -314,9 +326,18 @@
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        // Clear village ID from storage
-        GM_setValue(VILLAGE_ID_KEY, null);
-        alert(`All ${buttons.length} wards processed successfully! Village ID cleared from storage.`);
+        // Restore UI
+        if (btn) {
+            btn.innerText = "Extract All Wards";
+            btn.disabled = false;
+            btn.style.backgroundColor = "#28a745";
+            btn.style.cursor = "pointer";
+        }
+
+        // Remove tab closure prevention
+        window.removeEventListener('beforeunload', preventClose);
+
+        alert(`All ${buttons.length} wards processed successfully!`);
     }
 
     // Function for ward page (original functionality)
