@@ -1,54 +1,45 @@
 // ==UserScript==
 // @name         Voter Data Extractor
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Extracts voter data from the second table in #printArea, prints to console, and uploads to a dummy endpoint with a village ID.
+// @version      2.1
+// @description  Extracts voter data from village page, navigates through all wards, and uploads to API with village ID.
 // @author       Cursor Agent
+// @match        https://finalgprolls.tsec.gov.in/gpwardwisevoterlistrural1.do
 // @match        https://finalgprolls.tsec.gov.in/gpwardvoterselec1.do
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
 // ==/UserScript==
 
 (function () {
     'use strict';
 
     // Configuration
-    const UPLOAD_URL = 'https://api.thecircleapp.in/web-app/gp-trotter/ingest';
+    const UPLOAD_URL = 'http://localhost:3000/web-app/gp-trotter/ingest';
+    const VILLAGE_ID_KEY = 'voter_extractor_village_id';
 
-    function extractAndUpload() {
-        // Prompt for Village ID
-        const villageIdStr = prompt("Please enter the Village ID (Integer):");
-        if (!villageIdStr) {
-            return; // User cancelled
-        }
+    // Check if we're on the village page or ward page
+    const isVillagePage = window.location.href.includes('gpwardwisevoterlistrural1.do');
+    const isWardPage = window.location.href.includes('gpwardvoterselec1.do');
 
-        const villageId = parseInt(villageIdStr, 10);
-        if (isNaN(villageId)) {
-            alert("Invalid Village ID. Please enter a valid integer.");
-            return;
-        }
-
-        console.log(`Starting extraction for Village ID: ${villageId}...`);
-
+    // Function to extract data from ward page (popup)
+    function extractDataFromWardPage(doc, villageId) {
         // 0. Detect Language
         let language = 'en';
-        const pageText = document.body.innerText;
+        const pageText = doc.body.innerText;
         if (pageText.includes('గ్రామ పంచాయితి') || pageText.includes('సాధారణ ఎన్నికలు')) {
             language = 'te';
         }
-        console.log(`Detected Language: ${language}`);
 
         // 1. Extract Ward Number
         let wardNo = "";
-        const wardTds = document.querySelectorAll('#printArea td');
+        const wardTds = doc.querySelectorAll('#printArea td');
         for (let i = 0; i < wardTds.length; i++) {
             const text = wardTds[i].innerText.trim();
-            // Check for "Ward No." in English or Telugu ("వార్డు నె౦బరు")
             if (text === 'Ward No.' || text.includes('వార్డు నె౦బరు')) {
                 const nextTd = wardTds[i].nextElementSibling;
                 if (nextTd) {
-                    // Value is like ":Ward -1" or ":1"
                     let val = nextTd.innerText.replace(/^:?\s*/, '').trim();
-                    // Remove "Ward -" prefix if present (English)
                     val = val.replace('Ward -', '').trim();
                     wardNo = parseInt(val, 10);
                     break;
@@ -62,13 +53,11 @@
         let otherCount = 0;
         let totalCount = 0;
 
-        // Strategy: Target the specific summary table structure directly.
-        const mainTable = document.querySelector('#printArea table');
+        const mainTable = doc.querySelector('#printArea table');
         if (mainTable) {
             const summaryRows = mainTable.querySelectorAll('tr');
             for (let i = 0; i < summaryRows.length; i++) {
                 const rowText = summaryRows[i].innerText;
-                // Check for "Total Voters Details" in English or "మొత్తం ఓటర్ల వివరాలు" in Telugu
                 if (rowText.includes('Total Voters Details') || rowText.includes('మొత్తం ఓటర్ల వివరాలు')) {
                     const cells = summaryRows[i].querySelectorAll('td');
                     if (cells.length >= 5) {
@@ -83,14 +72,7 @@
         }
 
         // 3. Extract Voters
-        const voterTables = document.querySelectorAll('#printArea table.bl.bb.br.bt');
-
-        if (voterTables.length === 0) {
-            console.error("No voter tables found. Please check the selector.");
-            alert("No voter tables found!");
-            return;
-        }
-
+        const voterTables = doc.querySelectorAll('#printArea table.bl.bb.br.bt');
         const voters = [];
 
         voterTables.forEach((table, index) => {
@@ -103,20 +85,13 @@
             }
 
             try {
-                // --- Row 1: Serial No, AC No, PS No, SLNo ---
                 const serialCell = rows[0].querySelector('td:nth-child(1)');
                 if (serialCell) voter.serial_no = serialCell.innerText.trim();
 
-                // Cell 2: AC, PS, SL Details
-                // English: A.C No.:-<b>116</b> PS No.: -<b>60</b> SLNo.: -<b>1</b>
-                // Telugu: ఎ.సి -పి.ఎస్ - వరుస సంఖ్య. : <b>116</b> - <b>60</b> - <b> 1</b>
                 const detailsCell = rows[0].querySelector('td:nth-child(2)');
                 if (detailsCell) {
-                    // Use a more generic regex to capture numbers
-                    // We expect 3 numbers in the text
                     const text = detailsCell.innerText;
                     const numbers = text.match(/(\d+)/g);
-
                     if (numbers && numbers.length >= 3) {
                         voter.ac_no = numbers[0];
                         voter.ps_no = numbers[1];
@@ -124,61 +99,25 @@
                     }
                 }
 
-                // --- Row 2: Name ---
                 const nameCell = rows[1].querySelector('td:nth-child(2) b');
                 if (nameCell) voter.name = nameCell.innerText.replace(/^:\s*/, '').trim();
 
-                // --- Row 3: Relation ---
-                // Type is in the first cell (Father/Husband Name), Name is in the second cell
                 const relTypeCell = rows[2].querySelector('td:nth-child(1)');
                 const relNameCell = rows[2].querySelector('td:nth-child(2) b');
                 if (relTypeCell) voter.relation_type = relTypeCell.innerText.trim();
                 if (relNameCell) voter.relation_name = relNameCell.innerText.replace(/^:\s*/, '').trim();
 
-                // --- Row 4: Age & Sex ---
-                // English: Age : 24 Sex : F
-                // Telugu: వయస్సు : 24 లింగము : F
-                // The structure is typically label: value label: value. 
-                // We can just find the numbers for age and M/F for sex.
-                const ageSexCell = rows[3].querySelector('td:nth-child(2)'); // This selector might be tricky across langs if structure differs slightly
-                // In Telugu HTML provided:
-                // Row 4 (index 3) contains a nested table for Age/Sex
-                // <table width="100%" ...> ... <td>Age/వయస్సు</td> <td>:24</td> ... </table>
-
-                // Let's try to find the bold elements inside row 3 (which is the 4th row)
-                // Actually, in the Telugu HTML, the Age/Sex row contains a nested table.
-                // In English HTML, it is a direct TD.
-                // However, we can just look for bold tags within this row generally.
-
-                // Generic strategy for Age/Sex row:
-                // Find the cell containing the values.
-                // In English: `<td>:24 &nbsp; Sex : :F</td>` (approx)
-                // In Telugu: It uses a nested table, but values are in bold tags.
-
-                // Let's look for all bold tags in this row and infer.
-                const bTags = rows[3].querySelectorAll('b');
-                // Usually first bold is Age, second is Sex (if nested table)
-                // Or just parse the text of the row.
-
                 const row4Text = rows[3].innerText;
-                const ageMatch = row4Text.match(/(\d+)/); // First number is likely age
-                // Sex is M or F (or Telugu equivalent? Usually data is M/F even in Telugu forms)
-                // In Telugu HTML: <td><b>:M</b></td>
+                const ageMatch = row4Text.match(/(\d+)/);
                 const sexMatch = row4Text.match(/\b([MF])\b/i) || row4Text.match(/:([MF])/i);
 
                 if (ageMatch) voter.age = ageMatch[1];
                 if (sexMatch) voter.sex = sexMatch[1];
 
-
-                // --- Row 5: Door No ---
-                // English: Door No. : 0000
-                // Telugu: ఇ.నెం. : 0000
                 const doorCell = rows[4].querySelector('td:nth-child(2) b');
                 if (doorCell) voter.door_no = doorCell.innerText.replace(/^:\s*/, '').trim();
 
-                // --- Row 6: EPIC No ---
-                // Use the last row of the table to be safe, or check for specific text
-                const epicRow = rows[rows.length - 1]; // Usually the last row
+                const epicRow = rows[rows.length - 1];
                 if (epicRow) {
                     const epicB = epicRow.querySelector('b');
                     if (epicB) {
@@ -187,14 +126,12 @@
                 }
 
                 voters.push(voter);
-
             } catch (err) {
                 console.error(`Error extracting data for table ${index}`, err);
             }
         });
 
-        // Construct Payload
-        const payload = {
+        return {
             village_id: villageId,
             ward_no: wardNo,
             language: language,
@@ -204,37 +141,226 @@
             total_votes: totalCount,
             voters: voters
         };
+    }
 
-        // Print to console
-        console.log("Extracted Data:", payload);
-        const jsonPayload = JSON.stringify(payload, null, 2);
-        console.log(jsonPayload);
+    // Function to upload data
+    function uploadData(payload) {
+        return new Promise((resolve, reject) => {
+            const jsonPayload = JSON.stringify(payload, null, 2);
+            console.log(`Uploading ward ${payload.ward_no} data:`, jsonPayload);
 
-        // Upload to Endpoint
-        console.log(`Uploading to ${UPLOAD_URL}...`);
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: UPLOAD_URL,
-            data: jsonPayload,
-            headers: {
-                "Content-Type": "application/json"
-            },
-            onload: function (response) {
-                console.log("Upload Response:", response.responseText);
-                alert(`Data extracted (${voters.length} records) and uploaded successfully for Village ID ${villageId}!`);
-                windown.close();
-            },
-            onerror: function (error) {
-                console.error("Upload Error:", error);
-                alert("Upload failed. Check console for details.");
-            }
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: UPLOAD_URL,
+                data: jsonPayload,
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                onload: function (response) {
+                    console.log(`Upload Response for ward ${payload.ward_no}:`, response.responseText);
+                    resolve(response);
+                },
+                onerror: function (error) {
+                    console.error(`Upload Error for ward ${payload.ward_no}:`, error);
+                    reject(error);
+                }
+            });
         });
+    }
+
+    // Function to fetch ward data directly (bypassing popup)
+    function fetchWardData(url, params) {
+        return new Promise((resolve, reject) => {
+            // Construct form data string
+            const formData = new URLSearchParams();
+            for (const [key, value] of Object.entries(params)) {
+                formData.append(key, value);
+            }
+
+            console.log(`Fetching data from ${url} with params:`, Object.fromEntries(formData));
+
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: url,
+                data: formData.toString(),
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                onload: function (response) {
+                    if (response.status === 200) {
+                        resolve(response.responseText);
+                    } else {
+                        reject(new Error(`HTTP Error ${response.status}`));
+                    }
+                },
+                onerror: function (error) {
+                    reject(error);
+                }
+            });
+        });
+    }
+
+    // Function to process all buttons on village page
+    async function processAllWards() {
+        // Get village ID from storage or prompt
+        let villageId = GM_getValue(VILLAGE_ID_KEY);
+
+        if (!villageId) {
+            const villageIdStr = prompt("Please enter the Village ID (Integer):");
+            if (!villageIdStr) {
+                return; // User cancelled
+            }
+
+            villageId = parseInt(villageIdStr, 10);
+            if (isNaN(villageId)) {
+                alert("Invalid Village ID. Please enter a valid integer.");
+                return;
+            }
+
+            GM_setValue(VILLAGE_ID_KEY, villageId);
+        } else {
+            villageId = parseInt(villageId, 10);
+        }
+
+        console.log(`Starting extraction for Village ID: ${villageId}...`);
+
+        // Find all "Electoral Rolls" buttons (both English and Telugu)
+        const buttons = document.querySelectorAll('input[type="button"][value="Electoral Rolls"]');
+
+        if (buttons.length === 0) {
+            alert("No Electoral Rolls buttons found on this page!");
+            return;
+        }
+
+        console.log(`Found ${buttons.length} buttons to process`);
+
+        // Base URL for the request
+        const baseUrl = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + '/gpwardvoterselec1.do';
+
+        // Process buttons sequentially
+        for (let i = 0; i < buttons.length; i++) {
+            const button = buttons[i];
+            console.log(`Processing button ${i + 1} of ${buttons.length}`);
+
+            // Extract parameters from onclick attribute
+            const onclickAttr = button.getAttribute('onclick');
+            if (!onclickAttr) {
+                console.warn(`Button ${i + 1} has no onclick attribute, skipping`);
+                continue;
+            }
+
+            // Parse onclick to extract popupData parameters
+            // Format: popupData('English','189','31','13','15','1')
+            const match = onclickAttr.match(/popupData\(['"]([^'"]+)['"]\s*,\s*['"]?(\d+)['"]?\s*,\s*['"]?(\d+)['"]?\s*,\s*['"]?(\d+)['"]?\s*,\s*['"]?(\d+)['"]?\s*,\s*['"]?(\d+)['"]?\)/);
+
+            if (!match) {
+                console.warn(`Could not parse onclick for button ${i + 1}: ${onclickAttr}`);
+                continue;
+            }
+
+            const [, type, election_id, district_id, mandal_id, gpcode, ward_id] = match;
+
+            // Determine mode based on type
+            let mode = "";
+            if (type == "English") {
+                mode = "createViewInEnglishReport";
+            } else if (type == "Telugu") {
+                mode = "createViewInTeluguReport";
+            } else if (type == "SuplEnglish") {
+                mode = "createViewInEnglishSuplReport";
+            } else if (type == "SuplTelugu") {
+                mode = "createViewInTeluguSuplReport";
+            } else if (type == "TeluguMptc") {
+                mode = "showMptcWardVoters";
+            }
+
+            // Prepare parameters for POST request
+            const params = {
+                election_id: election_id,
+                district_id: district_id,
+                mandal_id: mandal_id,
+                gpcode: gpcode,
+                ward_id: ward_id,
+                mode: mode
+            };
+
+            try {
+                // Fetch data in background
+                const htmlContent = await fetchWardData(baseUrl, params);
+
+                // Parse HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlContent, "text/html");
+
+                // Extract data
+                const payload = extractDataFromWardPage(doc, villageId);
+
+                // If ward number is missing from extraction (sometimes header differs), use the one from params
+                if (!payload.ward_no) {
+                    payload.ward_no = parseInt(ward_id, 10);
+                }
+
+                console.log(`Extracted data from ward ${payload.ward_no}:`, payload);
+
+                // Upload data
+                await uploadData(payload);
+                console.log(`Successfully processed ward ${payload.ward_no}`);
+
+            } catch (err) {
+                console.error(`Error processing ward ${ward_id}:`, err);
+            }
+
+            // Small delay to be nice to the server
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Clear village ID from storage
+        GM_setValue(VILLAGE_ID_KEY, null);
+        alert(`All ${buttons.length} wards processed successfully! Village ID cleared from storage.`);
+    }
+
+    // Function for ward page (original functionality)
+    function extractAndUploadFromWardPage() {
+        let villageId = GM_getValue(VILLAGE_ID_KEY);
+
+        if (!villageId) {
+            const villageIdStr = prompt("Please enter the Village ID (Integer):");
+            if (!villageIdStr) {
+                return;
+            }
+
+            villageId = parseInt(villageIdStr, 10);
+            if (isNaN(villageId)) {
+                alert("Invalid Village ID. Please enter a valid integer.");
+                return;
+            }
+        } else {
+            villageId = parseInt(villageId, 10);
+        }
+
+        const payload = extractDataFromWardPage(document, villageId);
+        console.log("Extracted Data:", payload);
+
+        uploadData(payload)
+            .then(() => {
+                alert(`Data extracted (${payload.voters.length} records) and uploaded successfully for Village ID ${villageId}!`);
+                window.close();
+            })
+            .catch((error) => {
+                alert("Upload failed. Check console for details.");
+            });
     }
 
     // Add a floating button to trigger extraction
     function addTriggerButton() {
+        // Remove existing button if any
+        const existingBtn = document.getElementById("tampermonkey-extract-btn");
+        if (existingBtn) {
+            existingBtn.remove();
+        }
+
         const btn = document.createElement('button');
-        btn.innerText = "Extract & Upload Data";
+        btn.innerText = isVillagePage ? "Extract All Wards" : "Extract & Upload Data";
         btn.id = "tampermonkey-extract-btn";
         btn.style.position = "fixed";
         btn.style.top = "20px";
@@ -249,14 +375,23 @@
         btn.style.fontSize = "16px";
         btn.style.boxShadow = "0 4px 6px rgba(0,0,0,0.1)";
 
-        btn.addEventListener('click', extractAndUpload);
+        btn.addEventListener('click', () => {
+            if (isVillagePage) {
+                processAllWards();
+            } else {
+                extractAndUploadFromWardPage();
+            }
+        });
 
         document.body.appendChild(btn);
     }
 
-    // Wait a moment for page to fully render before adding button (optional)
-    window.addEventListener('load', () => {
+    // Wait for page to load
+    if (document.readyState === 'loading') {
+        window.addEventListener('load', () => {
+            setTimeout(addTriggerButton, 1000);
+        });
+    } else {
         setTimeout(addTriggerButton, 1000);
-        setTimeout(extractAndUpload, 500);
-    });
+    }
 })();
