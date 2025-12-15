@@ -47,12 +47,26 @@
         const tables = Array.from(document.querySelectorAll("table.panelcinn01"));
 
         for (const table of tables) {
+            let rawMandalText = "";
+
+            // 1. Try finding mandal name in THEAD (Phase 1 style?)
             const mandalTh = table.querySelector("thead th[colspan='3'], thead th[colspan=\"3\"]");
-            if (!mandalTh) {
+            if (mandalTh) {
+                rawMandalText = mandalTh.textContent;
+            } else {
+                // 2. Try finding mandal name in previous sibling DIV (Phase 2 style)
+                // The structure is often: <div class="mandal-section-title">...</div> <table>...</table>
+                const prevDiv = table.previousElementSibling;
+                if (prevDiv && prevDiv.classList.contains("mandal-section-title")) {
+                    rawMandalText = prevDiv.textContent;
+                }
+            }
+
+            if (!rawMandalText) {
                 continue;
             }
 
-            const mandal = parseMandalName(mandalTh.textContent);
+            const mandal = parseMandalName(rawMandalText);
             if (!mandal) {
                 continue;
             }
