@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Eenadu Results Extractor (Mandal -> Panchayat Winners)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Scrape all mandal tables on Eenadu results page and download as XLSX/CSV (Mandal, Village, Winner, Party).
 // @author       Cursor Agent
-// @match        https://www.eenadu.net/telangana/panchayat-elections-results-phase1/*
+// @match        https://www.eenadu.net/telangana/panchayat-elections-results*
 // @match        file://*/*
 // @require      https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js
 // @grant        none
